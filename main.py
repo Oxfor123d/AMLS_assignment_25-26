@@ -46,7 +46,7 @@ def main():
     print(f"Student Number: SN25072441") 
     
     # 1. load data
-    print("\n[Step 1] Loading Dataset...")
+    print("\nStep 1: Loading Dataset...")
     data = load_data()
 
     train_images = data['train_images']
@@ -56,16 +56,16 @@ def main():
     test_images = data['test_images']
     test_labels = data['test_labels']
     
-    print(f"Data Loaded. Train: {train_images.shape}, Test: {test_images.shape}")
+    print(f"Data Loaded. Train: {train_images.shape}, Validation: {val_images.shape}, Test: {test_images.shape}")
 
     # 2. Model A (Random Forest)
     print("\n[Step 2] Running Model A (Classic Machine Learning)...")
-    results_A = run_model_A(train_images, train_labels, test_images, test_labels)
+    results_A = run_model_A(train_images, train_labels, val_images, val_labels, test_images, test_labels)
     
     # 3. Model B (CNN)
-    #print("\n[Step 3] Running Model B (Deep Learning)...")
+    #print("\nStep 3: Running Model B (Deep Learning)")
     
-    print("\n=== All Tasks Completed ===")
+    print("\nAll Tasks Completed")
 
 if __name__ == '__main__':
     main()
