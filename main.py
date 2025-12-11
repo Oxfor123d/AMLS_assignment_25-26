@@ -4,8 +4,8 @@ import sys
 import medmnist
 from medmnist import INFO
 
-from A.model import run_model_A
-from B.model import run_model_B 
+from Code.A.model import run_model_A
+from Code.B.model import run_model_B
 
 def load_data():
     """
