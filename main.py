@@ -5,8 +5,7 @@ import medmnist
 from medmnist import INFO
 
 from A.model import run_model_A
-
-# from B.model import run_model_B 
+from B.model import run_model_B 
 
 def load_data():
     """
@@ -59,11 +58,12 @@ def main():
     print(f"Data Loaded. Train: {train_images.shape}, Validation: {val_images.shape}, Test: {test_images.shape}")
 
     # 2. Model A (Random Forest)
-    print("\n[Step 2] Running Model A (Classic Machine Learning)...")
+    print("\n[Step 2] Running Model A (Classic Machine Learning)")
     results_A = run_model_A(train_images, train_labels, val_images, val_labels, test_images, test_labels)
     
     # 3. Model B (CNN)
-    #print("\nStep 3: Running Model B (Deep Learning)")
+    print("\nStep 3: Running Model B (Deep Learning)")
+    results_B = run_model_B(train_images, train_labels, val_images, val_labels, test_images, test_labels)
     
     print("\nAll Tasks Completed")
 
