@@ -7,6 +7,7 @@ import time
 from torch.utils.data import TensorDataset, DataLoader, Dataset
 from sklearn.metrics import accuracy_score, classification_report
 from torchvision import transforms
+from torch.utils.data import Subset
 
 class AddGaussianNoise(object):
     """
@@ -49,22 +50,26 @@ class BreastMNISTDataset(Dataset):
         return img, label
 
 class SimpleCNN(nn.Module):
-    def __init__(self):
+    def __init__(self, base_channels=32):
         super(SimpleCNN, self).__init__()
 
+        self.base_channels = base_channels
+
         # Convolution Layer 1: Input 1 channel (grayscale), Output 32 channels, Kernel size 3x3
-        self.conv1 = nn.Conv2d(in_channels=1, out_channels=32, kernel_size=3, padding=1)
+        self.conv1 = nn.Conv2d(1, base_channels, kernel_size=3, padding=1)
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2) # 28x28 -> 14x14
         
         # Convolution Layer 2: Input 32 channels, Output 64 channels
-        self.conv2 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(base_channels, base_channels * 2, kernel_size=3, padding=1)
 
         # Fully Connected Layers
         # Input dimensions: 64 channels × 7 × 7 pixels
-        self.fc1 = nn.Linear(64 * 7 * 7, 128)
-        self.fc2 = nn.Linear(128, 2) # 输出 2 类 (Benign, Malignant)
+        linear_input_size = (base_channels * 2) * 7 * 7
         
-        # Dropout
+        self.fc1 = nn.Linear(linear_input_size, 128)
+        self.fc2 = nn.Linear(128, 2)
+
+        # dropout
         self.dropout = nn.Dropout(0.5)
 
 
@@ -75,7 +80,7 @@ class SimpleCNN(nn.Module):
         x = self.pool(F.relu(self.conv2(x))) # Batch, 64, 7, 7
         
         #Flatten
-        x = x.view(-1, 64 * 7 * 7)
+        x = x.view(x.size(0), -1)
         
         x = F.relu(self.fc1(x))
         x = self.dropout(x)
@@ -142,13 +147,13 @@ def evaluate(model, loader, criterion, device, return_details=False):
         return avg_loss, avg_acc
 
 def run_experiment(train_images, train_labels, val_images, val_labels, test_images, test_labels, 
-                   aug_mode, device):
+                   aug_mode, base_channels, data_fraction, device):
     """ 
     General function for running a single random forest experiment
     
     """
     
-    print(f"\nRunning Experiment: Augmentation Mode: {aug_mode}")
+    print(f"\nRunning Experiment: Augmentation Mode: {aug_mode}, Capacity(Channels): {base_channels}, Data: {data_fraction*100}%")
     
     if aug_mode == 'geometric':
         # Strategy A: Geometric Transformation (Rotation + Reflection) 
@@ -176,16 +181,29 @@ def run_experiment(train_images, train_labels, val_images, val_labels, test_imag
     print(f"Training Budget: {EPOCHS} Epochs")
     
     # DataLoader
-    train_dataset = BreastMNISTDataset(train_images, train_labels, transform=train_transform)
+    full_train_dataset = BreastMNISTDataset(train_images, train_labels, transform=train_transform)
     val_dataset = BreastMNISTDataset(val_images, val_labels, transform=eval_transform)
     test_dataset = BreastMNISTDataset(test_images, test_labels, transform=eval_transform)
+    
+    if data_fraction < 1.0:
+
+        total_samples = len(full_train_dataset)
+        subset_size = int(total_samples * data_fraction)
+        
+        indices = list(range(subset_size))
+        
+        train_dataset = Subset(full_train_dataset, indices)
+        print(f"Training on {subset_size}/{total_samples} samples.")
+    else:
+        train_dataset = full_train_dataset
+        print(f"Training on all {len(full_train_dataset)} samples.")
     
     train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
     
     # Initialise the model
-    model = SimpleCNN().to(device)
+    model = SimpleCNN(base_channels=base_channels).to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     
@@ -218,40 +236,46 @@ def run_experiment(train_images, train_labels, val_images, val_labels, test_imag
     return test_acc
 
 def run_model_B(train_images, train_labels, val_images, val_labels, test_images, test_labels):
-    print("Initiating Model B CNN: Comparative testing of multiple data augmentation techniques")
+    print("Initiating Model B CNN: Comparative testing of multiple data augmentation techniques, different capacities and different training budgets")
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Running on device: {device}")
 
     # test 1: Baseline
-    acc_baseline = run_experiment(train_images, train_labels, val_images, val_labels, test_images, test_labels, 
-                   aug_mode='none', device=device)
+    acc_Baseline = run_experiment(train_images, train_labels, val_images, val_labels, test_images, test_labels, 
+                   aug_mode='none', base_channels=32, data_fraction=1.0, device=device)
     # test 2: Geometric
     acc_Geometric = run_experiment(train_images, train_labels, val_images, val_labels, test_images, test_labels, 
-                   aug_mode='geometric', device=device)
+                   aug_mode='geometric', base_channels=32, data_fraction=1.0, device=device)
     # test 3: Noise 
-    acc_noise = run_experiment(train_images, train_labels, val_images, val_labels, test_images, test_labels, 
-                   aug_mode='noise', device=device)
-    
+    acc_Noise = run_experiment(train_images, train_labels, val_images, val_labels, test_images, test_labels, 
+                   aug_mode='noise', base_channels=32, data_fraction=1.0, device=device)
+    # test 4: Low Capacity
+    acc_low_Capacity = run_experiment(train_images, train_labels, val_images, val_labels, test_images, test_labels, 
+                   aug_mode='none', base_channels=16, data_fraction=1.0, device=device)
+    # test 5: Half Budget
+    acc_half_Budget = run_experiment(train_images, train_labels, val_images, val_labels, test_images, test_labels, 
+                   aug_mode='geometric', base_channels=32, data_fraction=0.5, device=device)
     print("\nModel B final comparison results:")
-    print(f"Baseline Accuracy: {acc_baseline:.2f}%")
+    print(f"Baseline Accuracy: {acc_Baseline:.2f}%")
     print(f"Geometric Accuracy: {acc_Geometric:.2f}%")
-    print(f"noise Accuracy: {acc_noise:.2f}%")
+    print(f"noise Accuracy: {acc_Noise:.2f}%")
+    print(f"Low Capacity Accuracy: {acc_low_Capacity:.2f}%")
+    print(f"Half Budget Accuracy: {acc_half_Budget:.2f}%")
     
-    
-    if acc_Geometric > acc_baseline:
+    if acc_Geometric > acc_Baseline:
         print("Conclusion: Data augmentation (Geometric Transformation) has successfully enhanced the model's generalisation capability.")
     else:
         print("Conclusion: Data augmentation (Geometric Transformation) yields negligible results.")
 
-    if acc_noise > acc_baseline:
+    if acc_Noise > acc_Baseline:
         print("Conclusion: Data augmentation (Pixel Transformation) has successfully enhanced the model's generalisation capability.")
     else:
         print("Conclusion: Data augmentation (Pixel Transformation) yields negligible results.")
 
-    if acc_Geometric > acc_noise:
+    if acc_Geometric > acc_Noise:
         print("Conclusion: Data augmentation (Geometric transformations) is more effective at improving the model's generalisation capability.")
     else:
         print("Conclusion: Data augmentation (Pixel Transformation) is more effective at improving the model's generalisation capability.")
 
-    return {"baseline_acc": acc_baseline, "Geometric_acc": acc_Geometric, "noise_acc": acc_noise}
+    return {"baseline_acc": acc_Baseline, "Geometric_acc": acc_Geometric, "noise_acc": acc_Noise, "low_Capacity_acc": acc_low_Capacity, "half_Budget_acc": acc_half_Budget}
