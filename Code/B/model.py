@@ -8,6 +8,21 @@ from torch.utils.data import TensorDataset, DataLoader, Dataset
 from sklearn.metrics import accuracy_score, classification_report
 from torchvision import transforms
 from torch.utils.data import Subset
+import random
+import os
+
+def set_seed(seed=25072441):
+    """
+    Set seeds for reproducibility
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    print(f"Random seed set to {seed}")
 
 class AddGaussianNoise(object):
     """
@@ -57,10 +72,12 @@ class SimpleCNN(nn.Module):
 
         # Convolution Layer 1: Input 1 channel (grayscale), Output 32 channels, Kernel size 3x3
         self.conv1 = nn.Conv2d(1, base_channels, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(base_channels)
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2) # 28x28 -> 14x14
         
         # Convolution Layer 2: Input 32 channels, Output 64 channels
         self.conv2 = nn.Conv2d(base_channels, base_channels * 2, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(base_channels * 2)
 
         # Fully Connected Layers
         # Input dimensions: 64 channels × 7 × 7 pixels
@@ -76,8 +93,15 @@ class SimpleCNN(nn.Module):
     def forward(self, x):
         # x shape: (Batch, 1, 28, 28)
         
-        x = self.pool(F.relu(self.conv1(x))) # Batch, 32, 14, 14
-        x = self.pool(F.relu(self.conv2(x))) # Batch, 64, 7, 7
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = F.relu(x)
+        x = self.pool(x)
+        
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = F.relu(x)
+        x = self.pool(x)
         
         #Flatten
         x = x.view(x.size(0), -1)
@@ -206,16 +230,17 @@ def run_experiment(train_images, train_labels, val_images, val_labels, test_imag
     model = SimpleCNN(base_channels=base_channels).to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=15, gamma=0.1)
     
     # Train
     best_val_acc = 0
     best_model_state = None
-    
+
     for epoch in range(EPOCHS):
         train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, device)
         val_loss, val_acc = evaluate(model, val_loader, criterion, device)
+        scheduler.step()
 
-        
         # Early Stopping: Saving the Best Model
         if val_acc > best_val_acc:
             best_val_acc = val_acc
@@ -237,7 +262,7 @@ def run_experiment(train_images, train_labels, val_images, val_labels, test_imag
 
 def run_model_B(train_images, train_labels, val_images, val_labels, test_images, test_labels):
     print("Initiating Model B CNN: Comparative testing of multiple data augmentation techniques, different capacities and different training budgets")
-    
+    set_seed(25072441)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Running on device: {device}")
 
