@@ -4,10 +4,9 @@ import torch.optim as optim
 import torch.nn.functional as F
 import numpy as np
 import time
-from torch.utils.data import TensorDataset, DataLoader, Dataset
+from torch.utils.data import TensorDataset, DataLoader, Dataset, Subset
 from sklearn.metrics import accuracy_score, classification_report
 from torchvision import transforms
-from torch.utils.data import Subset
 import random
 import os
 
@@ -146,6 +145,7 @@ def evaluate(model, loader, criterion, device, return_details=False):
 
     all_preds = []
     all_labels = []
+    all_probs = []
     
     with torch.no_grad():
         for images, labels in loader:
@@ -155,23 +155,25 @@ def evaluate(model, loader, criterion, device, return_details=False):
             
             running_loss += loss.item()
             _, predicted = torch.max(outputs.data, 1)
+            probs = F.softmax(outputs, dim=1)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
             
             if return_details:
                 all_preds.extend(predicted.cpu().numpy())
                 all_labels.extend(labels.cpu().numpy())
+                all_probs.extend(probs.cpu().numpy())
             
     avg_loss = running_loss / len(loader)
     avg_acc = 100 * correct / total
 
     if return_details:
-        return avg_loss, avg_acc, all_labels, all_preds
+        return avg_loss, avg_acc, all_labels, all_preds, all_probs
     else:
         return avg_loss, avg_acc
 
 def run_experiment(train_images, train_labels, val_images, val_labels, test_images, test_labels, 
-                   aug_mode, base_channels, data_fraction, device):
+                   aug_mode, base_channels, data_fraction, device, return_history=False):
     """ 
     General function for running a single random forest experiment
     
@@ -232,6 +234,9 @@ def run_experiment(train_images, train_labels, val_images, val_labels, test_imag
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=15, gamma=0.1)
     
+    # History Storage
+    history = {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': []}
+    
     # Train
     best_val_acc = 0
     best_model_state = None
@@ -240,6 +245,11 @@ def run_experiment(train_images, train_labels, val_images, val_labels, test_imag
         train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, device)
         val_loss, val_acc = evaluate(model, val_loader, criterion, device)
         scheduler.step()
+
+        history['train_loss'].append(train_loss)
+        history['train_acc'].append(train_acc)
+        history['val_loss'].append(val_loss)
+        history['val_acc'].append(val_acc)
 
         # Early Stopping: Saving the Best Model
         if val_acc > best_val_acc:
@@ -253,11 +263,13 @@ def run_experiment(train_images, train_labels, val_images, val_labels, test_imag
     
     # test
     model.load_state_dict(best_model_state)
-    test_loss, test_acc, y_true, y_pred = evaluate(model, test_loader, criterion, device, return_details=True)
+    test_loss, test_acc, y_true, y_pred, y_probs = evaluate(model, test_loader, criterion, device, return_details=True)
     print(f"{aug_mode} Test Accuracy: {test_acc:.2f}%")
 
     print(classification_report(y_true, y_pred, digits=4))
-    
+
+    if return_history:
+        return test_acc, history, (y_true, y_pred, y_probs)
     return test_acc
 
 def run_model_B(train_images, train_labels, val_images, val_labels, test_images, test_labels):
@@ -266,41 +278,34 @@ def run_model_B(train_images, train_labels, val_images, val_labels, test_images,
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Running on device: {device}")
 
-    # test 1: Baseline
-    acc_Baseline = run_experiment(train_images, train_labels, val_images, val_labels, test_images, test_labels, 
-                   aug_mode='none', base_channels=32, data_fraction=1.0, device=device)
-    # test 2: Geometric
-    acc_Geometric = run_experiment(train_images, train_labels, val_images, val_labels, test_images, test_labels, 
-                   aug_mode='geometric', base_channels=32, data_fraction=1.0, device=device)
-    # test 3: Noise 
-    acc_Noise = run_experiment(train_images, train_labels, val_images, val_labels, test_images, test_labels, 
-                   aug_mode='noise', base_channels=32, data_fraction=1.0, device=device)
-    # test 4: Low Capacity
-    acc_low_Capacity = run_experiment(train_images, train_labels, val_images, val_labels, test_images, test_labels, 
-                   aug_mode='none', base_channels=16, data_fraction=1.0, device=device)
-    # test 5: Half Budget
-    acc_half_Budget = run_experiment(train_images, train_labels, val_images, val_labels, test_images, test_labels, 
-                   aug_mode='geometric', base_channels=32, data_fraction=0.5, device=device)
-    print("\nModel B final comparison results:")
-    print(f"Baseline Accuracy: {acc_Baseline:.2f}%")
-    print(f"Geometric Accuracy: {acc_Geometric:.2f}%")
-    print(f"noise Accuracy: {acc_Noise:.2f}%")
-    print(f"Low Capacity Accuracy: {acc_low_Capacity:.2f}%")
-    print(f"Half Budget Accuracy: {acc_half_Budget:.2f}%")
+    configs = [
+        ('Baseline', 'none', 32, 1.0, 'gray', '--'),
+        ('Geometric', 'geometric', 32, 1.0, 'blue', '-'),
+        ('Noise', 'noise', 32, 1.0, 'red', '-.'),
+        ('Low Capacity', 'none', 16, 1.0, 'green', '-'),
+        ('Half Budget', 'geometric', 32, 0.5, 'orange', ':')
+    ]
     
-    if acc_Geometric > acc_Baseline:
-        print("Conclusion: Data augmentation (Geometric Transformation) has successfully enhanced the model's generalisation capability.")
-    else:
-        print("Conclusion: Data augmentation (Geometric Transformation) yields negligible results.")
-
-    if acc_Noise > acc_Baseline:
-        print("Conclusion: Data augmentation (Pixel Transformation) has successfully enhanced the model's generalisation capability.")
-    else:
-        print("Conclusion: Data augmentation (Pixel Transformation) yields negligible results.")
-
-    if acc_Geometric > acc_Noise:
-        print("Conclusion: Data augmentation (Geometric transformations) is more effective at improving the model's generalisation capability.")
-    else:
-        print("Conclusion: Data augmentation (Pixel Transformation) is more effective at improving the model's generalisation capability.")
-
-    return {"baseline_acc": acc_Baseline, "Geometric_acc": acc_Geometric, "noise_acc": acc_Noise, "low_Capacity_acc": acc_low_Capacity, "half_Budget_acc": acc_half_Budget}
+    results = {}
+    for name, aug, ch, frac, col, ls in configs:
+        print(f"Running Config: {name}")
+        
+        acc, history, (y_true, y_pred, y_probs) = run_experiment(
+            train_images, train_labels, val_images, val_labels, test_images, test_labels, 
+            aug_mode=aug, base_channels=ch, data_fraction=frac, 
+            device=device, return_history=True
+        )
+        
+        results[name] = {
+            'acc': acc,
+            'history': history,
+            'y_true': y_true,
+            'y_pred': y_pred,
+            'y_probs': y_probs,
+            'color': col,
+            'ls': ls
+        }
+        
+    print("Model B experiments completed. Data collected.")
+    return results
+    

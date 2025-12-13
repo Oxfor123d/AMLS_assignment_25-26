@@ -4,8 +4,10 @@ import sys
 import medmnist
 from medmnist import INFO
 
+
 from Code.A.model import run_model_A
 from Code.B.model import run_model_B
+from Code.visualization import plot_all_results
 
 def load_data():
     """
@@ -19,10 +21,6 @@ def load_data():
     os.makedirs(output_folder, exist_ok=True)
     
     info = INFO[data_flag]
-    task = info['task']
-    n_channels = info['n_channels']
-    n_classes = len(info['label'])
-    
     DataClass = getattr(medmnist, info['python_class'])
     
     print(f"\n[Info] Checking/Downloading {data_flag}...")
@@ -58,12 +56,14 @@ def main():
     print(f"Data Loaded. Train: {train_images.shape}, Validation: {val_images.shape}, Test: {test_images.shape}")
 
     # 2. Model A (Random Forest)
-    print("\n[Step 2] Running Model A (Classic Machine Learning)")
+    print("\nStep 2: Running Model A (Classic Machine Learning)")
     results_A = run_model_A(train_images, train_labels, val_images, val_labels, test_images, test_labels)
     
     # 3. Model B (CNN)
     print("\nStep 3: Running Model B (Deep Learning)")
     results_B = run_model_B(train_images, train_labels, val_images, val_labels, test_images, test_labels)
+    # 4. plot
+    plot_all_results(data, results_A, results_B)
     
     print("\nAll Tasks Completed")
 
