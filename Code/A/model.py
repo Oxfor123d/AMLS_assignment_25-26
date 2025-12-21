@@ -1,122 +1,119 @@
 import numpy as np
+import time
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.decomposition import PCA
 from sklearn.metrics import accuracy_score, classification_report
-import time
 
-def flatten_and_normalize(images):
-    """
+# Global configs
+RF_SEED = 2447
+PCA_SEED = 2887
+TREE_COUNTS = [10, 30, 50, 100, 200]
 
-    Basic preprocessing: flattening & normalisation
+def preprocess(imgs):
+    # Flatten 28x28 images to 1D vector
+    N = imgs.shape[0]
+    flat = imgs.reshape(N, -1)
+    # Scale to 0-1
+    return flat.astype('float32') / 255.0
+
+def train_rf(X_train, y_train, X_val, y_val, X_test, y_test, name):
+    print(f"\nTraining {name}")
     
-    """
-    n_samples = images.shape[0]
-    # Flatten: (N, 28, 28) -> (N, 784)
-    flattened = images.reshape(n_samples, -1)
-    # Normalize
-    return flattened.astype('float32') / 255.0
-
-def run_rf_experiment(X_train, y_train, X_val, y_val, X_test, y_test, exp_name):
-    """
-
-    General function for running a single random forest experiment
-
-    """
-    print(f"\nprogressing: {exp_name}")
-    
-    # Define the parameters to be tested
-    estimators_list = [10, 30, 50, 100, 200]
     best_acc = 0
-    best_model = None
-    val_acc_history = []
-
-    # Tuning parameters on the validation set
-    for n in estimators_list:
-        clf = RandomForestClassifier(n_estimators=n, random_state=2447)
-        clf.fit(X_train, y_train)
+    best_rf = None
+    history = []
+    
+    # Grid search for n_estimators
+    for n in TREE_COUNTS:
+        rf = RandomForestClassifier(n_estimators=n, random_state=RF_SEED)
+        rf.fit(X_train, y_train)
         
-        val_pred = clf.predict(X_val)
-        val_acc = accuracy_score(y_val, val_pred)
-        val_acc_history.append(val_acc)
-        print(f"   [Tuning] Trees={n}, Val Acc={val_acc:.4f}")
+        # Check validation acc
+        val_pred = rf.predict(X_val)
+        acc = accuracy_score(y_val, val_pred)
+        history.append(acc)
         
-        if val_acc > best_acc:
-            best_acc = val_acc
-            best_model = clf
+        print(f"Trees: {n}, Val_Acc: {acc:.4f}.")
+        
+        if acc > best_acc:
+            best_acc = acc
+            best_rf = rf
             
-    print(f"Best validation set accuracy: {best_acc:.4f}")
+    print(f"Best Val_Acc: {best_acc:.4f}")
     
-    # Evaluate the best model on the test set
-    start_time = time.time()
-    test_pred = best_model.predict(X_test)
-    end_time = time.time()
+    # test
+    t0 = time.time()
+    test_pred = best_rf.predict(X_test)
+    t1 = time.time()
     
-    test_acc = accuracy_score(y_test, test_pred)
-    inference_time = end_time - start_time
+    final_acc = accuracy_score(y_test, test_pred)
+    print(f"Test Acc: {final_acc:.4f}")
+    print(f"Inference Time: {t1 - t0:.4f}s")
     
-    print(f"Test set accuracy: {test_acc:.4f}")
-    print(f"Time-consuming: {inference_time:.4f} s")
-    
+    # Detailed report
     print(classification_report(y_test, test_pred))
     
-    return test_acc, val_acc_history, best_model
+    return final_acc, history, best_rf
 
-def run_model_A(train_images, train_labels, val_images, val_labels, test_images, test_labels):
-    print("Initiating Model A: Feature Engineering Comparative Testing")
+def run_model_A(train_imgs, train_lbls, val_imgs, val_lbls, test_imgs, test_lbls):
+    print("Start Model A (RF vs PCA)")
     
-    # 1. basic data processing
-    X_train_raw = flatten_and_normalize(train_images)
-    X_val_raw   = flatten_and_normalize(val_images)
-    X_test_raw  = flatten_and_normalize(test_images)
+    # 1. Prepare data (Flattened)
+    train_flat = preprocess(train_imgs)
+    val_flat   = preprocess(val_imgs)
+    test_flat  = preprocess(test_imgs)
     
-    # Label flatten
-    y_train = train_labels.ravel()
-    y_val   = val_labels.ravel()
-    y_test  = test_labels.ravel()
+    # flatten labels
+    y_train = train_lbls.ravel()
+    y_val   = val_lbls.ravel()
+    y_test  = test_lbls.ravel()
     
-    # test 1: Raw Pixels
-    acc_raw, val_accs_raw, best_model_raw = run_rf_experiment(
-        X_train_raw, y_train, X_val_raw, y_val, X_test_raw, y_test, 
-        "Baseline (Raw Pixels)"
+    # Experiment 1: Raw Pixels
+    acc_raw, hist_raw, model_raw = train_rf(
+        train_flat, y_train, 
+        val_flat, y_val, 
+        test_flat, y_test, 
+        "Baseline (Raw)"
     )
     
-
-    # test 2: PCA Feature extraction
-    pca = PCA(n_components=50, random_state=2887)
+    # Experiment 2: PCA
+    # reduce dim from 784 -> 50
+    pca = PCA(n_components=50, random_state=PCA_SEED)
     
-    # Fit on Train
-    X_train_pca = pca.fit_transform(X_train_raw)
-    # Transform Val & Test
-    X_val_pca   = pca.transform(X_val_raw)
-    X_test_pca  = pca.transform(X_test_raw)
+    train_pca = pca.fit_transform(train_flat)
+    val_pca   = pca.transform(val_flat)
+    test_pca  = pca.transform(test_flat)
     
-    print(f"Data shape variation: {X_train_raw.shape} to {X_train_pca.shape}")
+    print(f"PCA Reduction: {train_flat.shape} to {train_pca.shape}")
     
-    acc_pca, val_accs_pca, best_model_pca = run_rf_experiment(
-        X_train_pca, y_train, X_val_pca, y_val, X_test_pca, y_test, 
-        "PCA Features (50 components)"
+    acc_pca, hist_pca, model_pca = train_rf(
+        train_pca, y_train, 
+        val_pca, y_val, 
+        test_pca, y_test, 
+        "PCA Features"
     )
     
-
-    print("\nModel A final comparison results:")
-    print(f"Raw Pixels Accuracy: {acc_raw:.4f}")
-    print(f"PCA Features Accuracy: {acc_pca:.4f}")
+    # Summary
+    print("\nModel A Results: ")
+    print(f"Raw: {acc_raw:.4f}")
+    print(f"PCA: {acc_pca:.4f}")
     
-    y_prob_raw = best_model_raw.predict_proba(X_test_raw)[:, 1]
-    y_prob_pca = best_model_pca.predict_proba(X_test_pca)[:, 1]
+    # Get probs for ROC later
+    prob_raw = model_raw.predict_proba(test_flat)[:, 1]
+    prob_pca = model_pca.predict_proba(test_pca)[:, 1]
     
+    # Pack everything for plotting
     results = {
-        'trees': [10, 30, 50, 100, 200],
-        'raw_val_accs': val_accs_raw,
-        'pca_val_accs': val_accs_pca,
+        'trees': TREE_COUNTS,
+        'raw_val_accs': hist_raw,
+        'pca_val_accs': hist_pca,
         'roc_data': {
             'y_test': y_test,
-            'y_prob_raw': y_prob_raw,
-            'y_prob_pca': y_prob_pca,
+            'y_prob_raw': prob_raw,
+            'y_prob_pca': prob_pca,
             'acc_raw': acc_raw * 100,
             'acc_pca': acc_pca * 100
         }
     }
     
     return results
-

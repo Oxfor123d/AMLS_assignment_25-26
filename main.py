@@ -1,71 +1,65 @@
 import os
 import numpy as np
-import sys
 import medmnist
 from medmnist import INFO
-
 
 from Code.A.model import run_model_A
 from Code.B.model import run_model_B
 from Code.visualization import plot_all_results
 
-def load_data():
-    """
-    Intelligent Data Loader:
-    1. Verify presence of breastmnist.npz within the Datasets folder
-    2. If absent, initiate automatic download
-    3. Return loaded data dictionary
-    """
+def get_data():
+    # Setup path
     data_flag = 'breastmnist'
-    output_folder = 'Datasets'
-    os.makedirs(output_folder, exist_ok=True)
+    root = 'Datasets'
     
+    # Check/Download using medmnist api
     info = INFO[data_flag]
     DataClass = getattr(medmnist, info['python_class'])
     
-    print(f"\n[Info] Checking/Downloading {data_flag}...")
+    # Download if missing
+    DataClass(split='train', download=True, root=root)
+    DataClass(split='val', download=True, root=root)
+    DataClass(split='test', download=True, root=root)
     
-    DataClass(split='train', download=True, root=output_folder)
-    DataClass(split='val', download=True, root=output_folder)
-    DataClass(split='test', download=True, root=output_folder)
-    
-    npz_file = f"{data_flag}.npz"
-    data_path = os.path.join(output_folder, npz_file)
-    
-    if os.path.exists(data_path):
-        print(f"[Success] Data file ready at: {data_path}")
-        return np.load(data_path)
+    # Load .npz file
+    npz_path = os.path.join(root, f"{data_flag}.npz")
+    if os.path.exists(npz_path):
+        print(f"Data found at: {npz_path}")
+        return np.load(npz_path)
     else:
-        raise FileNotFoundError(f"Failed to load data from {data_path}")
+        raise FileNotFoundError("NPZ file not found, download failed.")
 
 def main():
-    print("AMLS Assignment 25-26: BreastMNIST Classification")
-    print(f"Student Number: SN25072441") 
+    print("\n AMLS Assignment 25-26 | SN: 25072441 ")
     
-    # 1. load data
-    print("\nStep 1: Loading Dataset...")
-    data = load_data()
+    # 1. Load Data
+    print("\nLoading BreastMNIST")
+    data = get_data()
 
-    train_images = data['train_images']
-    train_labels = data['train_labels']
-    val_images = data['val_images']
-    val_labels = data['val_labels']
-    test_images = data['test_images']
-    test_labels = data['test_labels']
+    # Unpack
+    tr_x = data['train_images']
+    tr_y = data['train_labels']
+    val_x = data['val_images']
+    val_y = data['val_labels']
+    te_x = data['test_images']
+    te_y = data['test_labels']
     
-    print(f"Data Loaded. Train: {train_images.shape}, Validation: {val_images.shape}, Test: {test_images.shape}")
+    print(f"Train: {tr_x.shape} | Val: {val_x.shape} | Test: {te_x.shape}")
 
-    # 2. Model A (Random Forest)
-    print("\nStep 2: Running Model A (Classic Machine Learning)")
-    results_A = run_model_A(train_images, train_labels, val_images, val_labels, test_images, test_labels)
+    # 2. Run Model A (RF)
+    print("\nModel A: Random Forest vs PCA")
+    res_a = run_model_A(tr_x, tr_y, val_x, val_y, te_x, te_y)
     
-    # 3. Model B (CNN)
-    print("\nStep 3: Running Model B (Deep Learning)")
-    results_B = run_model_B(train_images, train_labels, val_images, val_labels, test_images, test_labels)
-    # 4. plot
-    plot_all_results(data, results_A, results_B)
+    # 3. Run Model B (CNN)
+    print("\nModel B: CNN Experiments")
+    res_b = run_model_B(tr_x, tr_y, val_x, val_y, te_x, te_y)
     
-    print("\nAll Tasks Completed")
+    # 4. Visualization
+    print("\nPlotting Results")
+    # Generate charts and save to /Plots folder
+    plot_all_results(data, res_a, res_b)
+    
+    print("\nAll Tasks Finished Successfully, yeah!")
 
 if __name__ == '__main__':
     main()

@@ -3,30 +3,32 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 import numpy as np
+import random
 import time
 from torch.utils.data import TensorDataset, DataLoader, Dataset, Subset
 from sklearn.metrics import accuracy_score, classification_report
 from torchvision import transforms
-import random
-import os
 
-def set_seed(seed=25072441):
-    """
-    Set seeds for reproducibility
-    """
+# Global configs
+SEED = 25072441
+BATCH_SIZE = 32
+LR = 0.001
+MAX_EPOCHS = 50
+
+# Set device using cppu
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
+
+def set_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-    print(f"Random seed set to {seed}")
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
 
+# Custom Transform: Add noise to images
 class AddGaussianNoise(object):
-    """
-    Custom Transform: Add Gaussian noise to the Tensor
-    """
     def __init__(self, mean=0., std=0.1):
         self.mean = mean
         self.std = std
@@ -34,278 +36,227 @@ class AddGaussianNoise(object):
     def __call__(self, tensor):
         noise = torch.randn(tensor.size()) * self.std + self.mean
         return torch.clamp(tensor + noise, 0., 1.)
-    
-    def __repr__(self):
-        return self.__class__.__name__ + '(mean={0}, std={1})'.format(self.mean, self.std)
 
-class BreastMNISTDataset(Dataset):
-    def __init__(self, images, labels, transform=None):
-        """
-        images: numpy array (N, 28, 28)
-        labels: numpy array (N, 1)
-        """
-        if len(images.shape) == 3:
-            images = np.expand_dims(images, axis=1)
+# Dataset processing
+class BreastDataset(Dataset):
+    def __init__(self, imgs, lbls, transform=None):
+        if len(imgs.shape) == 3:
+            imgs = np.expand_dims(imgs, axis=1)
             
-        self.images = torch.tensor(images, dtype=torch.float32) / 255.0
-        self.labels = torch.tensor(labels, dtype=torch.long).squeeze() 
+        self.x = torch.tensor(imgs, dtype=torch.float32) / 255.0
+        self.y = torch.tensor(lbls, dtype=torch.long).squeeze() 
         self.transform = transform
 
     def __len__(self):
-        return len(self.images)
+        return len(self.x)
 
     def __getitem__(self, idx):
-        img = self.images[idx]
-        label = self.labels[idx]
+        img = self.x[idx]
+        lbl = self.y[idx]
         
         if self.transform:
             img = self.transform(img)
             
-        return img, label
+        return img, lbl
 
-class SimpleCNN(nn.Module):
-    def __init__(self, base_channels=32):
-        super(SimpleCNN, self).__init__()
+# CNN Architecture
+class BreastNet(nn.Module):
+    def __init__(self, num_filters=32):
+        super(BreastNet, self).__init__()
 
-        self.base_channels = base_channels
-
-        # Convolution Layer 1: Input 1 channel (grayscale), Output 32 channels, Kernel size 3x3
-        self.conv1 = nn.Conv2d(1, base_channels, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm2d(base_channels)
-        self.pool = nn.MaxPool2d(kernel_size=2, stride=2) # 28x28 -> 14x14
+        # Block 1: 1 -> 32
+        self.conv1 = nn.Conv2d(1, num_filters, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(num_filters)
         
-        # Convolution Layer 2: Input 32 channels, Output 64 channels
-        self.conv2 = nn.Conv2d(base_channels, base_channels * 2, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm2d(base_channels * 2)
+        # Block 2: 32 -> 64
+        self.conv2 = nn.Conv2d(num_filters, num_filters * 2, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(num_filters * 2)
 
-        # Fully Connected Layers
-        # Input dimensions: 64 channels × 7 × 7 pixels
-        linear_input_size = (base_channels * 2) * 7 * 7
+        # MaxPool
+        self.pool = nn.MaxPool2d(2, 2)
         
-        self.fc1 = nn.Linear(linear_input_size, 128)
+        # Image size: 28 -> 14 -> 7
+        flat_size = (num_filters * 2) * 7 * 7
+        self.fc1 = nn.Linear(flat_size, 128)
         self.fc2 = nn.Linear(128, 2)
 
-        # dropout
-        self.dropout = nn.Dropout(0.5)
-
+        self.drop = nn.Dropout(0.5)
 
     def forward(self, x):
-        # x shape: (Batch, 1, 28, 28)
-        
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = F.relu(x)
+        # Conv 1
+        x = F.relu(self.bn1(self.conv1(x)))
         x = self.pool(x)
         
-        x = self.conv2(x)
-        x = self.bn2(x)
-        x = F.relu(x)
+        # Conv 2
+        x = F.relu(self.bn2(self.conv2(x)))
         x = self.pool(x)
         
-        #Flatten
+        # Flatten
         x = x.view(x.size(0), -1)
         
+        # 全连接
         x = F.relu(self.fc1(x))
-        x = self.dropout(x)
+        x = self.drop(x)
         x = self.fc2(x)
+        
         return x
 
-def train_epoch(model, loader, criterion, optimizer, device):
-    model.train()
-    running_loss = 0.0
+def train_one_epoch(net, loader, crit, opt):
+    net.train()
+    loss_sum = 0
     correct = 0
     total = 0
     
-    for images, labels in loader:
-        images, labels = images.to(device), labels.to(device)
+    for x, y in loader:
+        x, y = x.to(device), y.to(device)
         
-        optimizer.zero_grad()
-        outputs = model(images)
-        loss = criterion(outputs, labels)
-        
+        opt.zero_grad()
+        out = net(x)
+        loss = crit(out, y)
         loss.backward()
-        optimizer.step()
+        opt.step()
         
-        running_loss += loss.item()
-        _, predicted = torch.max(outputs.data, 1)
-        total += labels.size(0)
-        correct += (predicted == labels).sum().item()
+        loss_sum += loss.item()
+        _, pred = torch.max(out, 1)
+        correct += (pred == y).sum().item()
+        total += y.size(0)
         
-    return running_loss / len(loader), 100 * correct / total
+    return loss_sum / len(loader), 100 * correct / total
 
-def evaluate(model, loader, criterion, device, return_details=False):
-    """
-    Evaluate on the validation set or test set
-    
-    """
-    model.eval()
-    running_loss = 0.0
+def eval_model(net, loader, crit, detailed=False):
+    net.eval()
+    loss_sum = 0
     correct = 0
     total = 0
-
-    all_preds = []
-    all_labels = []
-    all_probs = []
+    
+    # store for ROC
+    preds, labels, probs = [], [], []
     
     with torch.no_grad():
-        for images, labels in loader:
-            images, labels = images.to(device), labels.to(device)
-            outputs = model(images)
-            loss = criterion(outputs, labels)
+        for x, y in loader:
+            x, y = x.to(device), y.to(device)
+            out = net(x)
+            loss = crit(out, y)
             
-            running_loss += loss.item()
-            _, predicted = torch.max(outputs.data, 1)
-            probs = F.softmax(outputs, dim=1)
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
+            loss_sum += loss.item()
+            _, p = torch.max(out, 1)
+            prob = F.softmax(out, dim=1)
             
-            if return_details:
-                all_preds.extend(predicted.cpu().numpy())
-                all_labels.extend(labels.cpu().numpy())
-                all_probs.extend(probs.cpu().numpy())
+            correct += (p == y).sum().item()
+            total += y.size(0)
             
-    avg_loss = running_loss / len(loader)
-    avg_acc = 100 * correct / total
+            if detailed:
+                preds.extend(p.cpu().numpy())
+                labels.extend(y.cpu().numpy())
+                probs.extend(prob.cpu().numpy())
+                
+    acc = 100 * correct / total
+    avg_loss = loss_sum / len(loader)
+    
+    if detailed:
+        return avg_loss, acc, labels, preds, probs
+    return avg_loss, acc
 
-    if return_details:
-        return avg_loss, avg_acc, all_labels, all_preds, all_probs
-    else:
-        return avg_loss, avg_acc
-
-def run_experiment(train_images, train_labels, val_images, val_labels, test_images, test_labels, 
-                   aug_mode, base_channels, data_fraction, device, return_history=False):
-    """ 
-    General function for running a single random forest experiment
+def run_cnn_experiment(tr_img, tr_lbl, val_img, val_lbl, te_img, te_lbl, 
+                       mode='baseline', filters=32, data_pct=1.0):
     
-    """
+    print(f"\n Mode={mode} | Filters={filters} | Data={data_pct*100}%")
     
-    print(f"\nRunning Experiment: Augmentation Mode: {aug_mode}, Capacity(Channels): {base_channels}, Data: {data_fraction*100}%")
-    
-    if aug_mode == 'geometric':
-        # Strategy A: Geometric Transformation (Rotation + Reflection) 
-        train_transform = transforms.Compose([
+    # 1. Transforms
+    tr_trans = None
+    if mode == 'geometric':
+        tr_trans = transforms.Compose([
             transforms.RandomRotation(10),
             transforms.RandomHorizontalFlip(),
         ])
-        EPOCHS = 50
-        
-    elif aug_mode == 'noise':
-        # Strategy B: Pixel Transformation (Gaussian Noise)
-        train_transform = transforms.Compose([
-            AddGaussianNoise(mean=0., std=0.05),
+    elif mode == 'noise':
+        tr_trans = transforms.Compose([
+            AddGaussianNoise(0., 0.05),
         ])
-        EPOCHS = 50
         
+    # 2. Datasets
+    full_ds = BreastDataset(tr_img, tr_lbl, transform=tr_trans)
+    val_ds  = BreastDataset(val_img, val_lbl)
+    test_ds = BreastDataset(te_img, te_lbl)
+    
+    # Data Budget
+    if data_pct < 1.0:
+        n_sub = int(len(full_ds) * data_pct)
+        # pick first N samples
+        idx = list(range(n_sub))
+        train_ds = Subset(full_ds, idx)
+        print(f"Subset Training: {n_sub} samples")
     else:
-        # Baseline
-        train_transform = None
-        EPOCHS = 50
-
-    eval_transform = None
+        train_ds = full_ds
+    
+    # Load
+    tr_load = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
+    val_load = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False)
+    te_load  = DataLoader(test_ds, batch_size=BATCH_SIZE, shuffle=False)
+    
+    net = BreastNet(num_filters=filters).to(device)
+    crit = nn.CrossEntropyLoss()
+    opt = optim.Adam(net.parameters(), lr=LR)
+    sched = optim.lr_scheduler.StepLR(opt, step_size=15, gamma=0.1)
+    
+    best_acc = 0
+    best_wts = None
+    hist = {'tr_loss':[], 'tr_acc':[], 'val_loss':[], 'val_acc':[]}
+    
+    start_t = time.time()
+    for ep in range(MAX_EPOCHS):
+        tl, ta = train_one_epoch(net, tr_load, crit, opt)
+        vl, va = eval_model(net, val_load, crit)
+        sched.step()
         
-    print(f"Transform Strategy: {train_transform}")
-    print(f"Training Budget: {EPOCHS} Epochs")
-    
-    # DataLoader
-    full_train_dataset = BreastMNISTDataset(train_images, train_labels, transform=train_transform)
-    val_dataset = BreastMNISTDataset(val_images, val_labels, transform=eval_transform)
-    test_dataset = BreastMNISTDataset(test_images, test_labels, transform=eval_transform)
-    
-    if data_fraction < 1.0:
-
-        total_samples = len(full_train_dataset)
-        subset_size = int(total_samples * data_fraction)
+        hist['tr_loss'].append(tl)
+        hist['tr_acc'].append(ta)
+        hist['val_loss'].append(vl)
+        hist['val_acc'].append(va)
         
-        indices = list(range(subset_size))
-        
-        train_dataset = Subset(full_train_dataset, indices)
-        print(f"Training on {subset_size}/{total_samples} samples.")
-    else:
-        train_dataset = full_train_dataset
-        print(f"Training on all {len(full_train_dataset)} samples.")
-    
-    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
-    
-    # Initialise the model
-    model = SimpleCNN(base_channels=base_channels).to(device)
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=15, gamma=0.1)
-    
-    # History Storage
-    history = {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': []}
-    
-    # Train
-    best_val_acc = 0
-    best_model_state = None
-
-    for epoch in range(EPOCHS):
-        train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, device)
-        val_loss, val_acc = evaluate(model, val_loader, criterion, device)
-        scheduler.step()
-
-        history['train_loss'].append(train_loss)
-        history['train_acc'].append(train_acc)
-        history['val_loss'].append(val_loss)
-        history['val_acc'].append(val_acc)
-
-        # Early Stopping: Saving the Best Model
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
-            best_model_state = model.state_dict() 
+        if va > best_acc:
+            best_acc = va
+            best_wts = net.state_dict()
             
-        if (epoch + 1) % 5 == 0:
-            print(f"   Epoch [{epoch+1}/{EPOCHS}] Train Acc: {train_acc:.1f}% | Val Acc: {val_acc:.1f}%")
-
-    print(f"Best validation set accuracy: {best_val_acc:.2f}%")
+        if (ep+1) % 10 == 0:
+            print(f"Ep {ep+1}: Tr Acc={ta:.1f}%, Val Acc={va:.1f}%")
+            
+    print(f"Training Done in {time.time()-start_t:.1f}s. Best Val={best_acc:.2f}%")
     
-    # test
-    model.load_state_dict(best_model_state)
-    test_loss, test_acc, y_true, y_pred, y_probs = evaluate(model, test_loader, criterion, device, return_details=True)
-    print(f"{aug_mode} Test Accuracy: {test_acc:.2f}%")
-
+    # Test
+    net.load_state_dict(best_wts)
+    _, te_acc, y_true, y_pred, y_prob = eval_model(net, te_load, crit, detailed=True)
+    
+    print(f"Test Acc: {te_acc:.2f}%")
     print(classification_report(y_true, y_pred, digits=4))
+    
+    return te_acc, hist, (y_true, y_pred, y_prob)
 
-    if return_history:
-        return test_acc, history, (y_true, y_pred, y_probs)
-    return test_acc
-
-def run_model_B(train_images, train_labels, val_images, val_labels, test_images, test_labels):
-    print("Initiating Model B CNN: Comparative testing of multiple data augmentation techniques, different capacities and different training budgets")
-    set_seed(25072441)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Running on device: {device}")
-
-    configs = [
-        ('Baseline', 'none', 32, 1.0, 'gray', '--'),
-        ('Geometric', 'geometric', 32, 1.0, 'blue', '-'),
-        ('Noise', 'noise', 32, 1.0, 'red', '-.'),
-        ('Low Capacity', 'none', 16, 1.0, 'green', '-'),
-        ('Half Budget', 'geometric', 32, 0.5, 'orange', ':')
+def run_model_B(tr_x, tr_y, val_x, val_y, te_x, te_y):
+    print("Start Model B (CNN Analysis)")
+    set_seed(SEED)
+    
+    # Configs: (Name, Mode, Filters, Data%, Color)
+    exps = [
+        ('Baseline',     'baseline',  32, 1.0, 'gray'),
+        ('Geometric',    'geometric', 32, 1.0, 'blue'),
+        ('Noise',        'noise',     32, 1.0, 'red'),
+        ('Low Capacity', 'baseline',  16, 1.0, 'green'),
+        ('Half Budget',  'geometric', 32, 0.5, 'orange')
     ]
     
-    results = {}
-    for name, aug, ch, frac, col, ls in configs:
-        print(f"Running Config: {name}")
-        
-        acc, history, (y_true, y_pred, y_probs) = run_experiment(
-            train_images, train_labels, val_images, val_labels, test_images, test_labels, 
-            aug_mode=aug, base_channels=ch, data_fraction=frac, 
-            device=device, return_history=True
+    all_res = {}
+    
+    for name, mode, filt, pct, col in exps:
+        acc, h, preds = run_cnn_experiment(
+            tr_x, tr_y, val_x, val_y, te_x, te_y,
+            mode=mode, filters=filt, data_pct=pct
         )
-        
-        results[name] = {
-            'acc': acc,
-            'history': history,
-            'y_true': y_true,
-            'y_pred': y_pred,
-            'y_probs': y_probs,
-            'color': col,
-            'ls': ls
+        all_res[name] = {
+            'acc': acc, 
+            'history': h, 
+            'preds': preds, 
+            'color': col
         }
         
-    print("Model B experiments completed. Data collected.")
-    return results
-    
+    return all_res
