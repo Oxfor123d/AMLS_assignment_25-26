@@ -19,7 +19,7 @@ The study investigates:
 
 The project is organized as follows:
 
-
+```text
 .
 ├── Code/
 │   ├── A/
@@ -33,6 +33,7 @@ The project is organized as follows:
 ├── requirements.txt         # List of dependencies
 └── README.md                # Project documentation
 
+```
 ---
 
 ## Environment Setup & InstallationTo
@@ -42,11 +43,13 @@ To reproduce the results exactly as reported, please follow these setup steps.
 1. **Prerequisites**
 
 Python 3.8 or higher. I use the Python 3.12.7
+
 It is recommended to use a virtual environment venv to avoid conflicts.
 
 Bash: 
 
 python -m venv venv
+
 .\venv\Scripts\activate
 
 2. **Install Dependencies**
@@ -54,6 +57,7 @@ python -m venv venv
 Navigate to the project root directory and install the required packages:
 
 Bash: 
+
 pip install -r requirements.txt
 
 ---
@@ -63,6 +67,7 @@ pip install -r requirements.txt
 To run the entire pipeline (Data Loading -> Model A -> Model B -> Visualization), simply execute:
 
 Bash:
+
 python main.py
 
 
