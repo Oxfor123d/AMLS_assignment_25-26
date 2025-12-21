@@ -45,6 +45,8 @@ Python 3.8 or higher. I use the Python 3.12.7
 It is recommended to use a virtual environment venv to avoid conflicts.
 
 Bash: 
+
+python -m venv venv
 .\venv\Scripts\activate
 
 2. **Install Dependencies**
