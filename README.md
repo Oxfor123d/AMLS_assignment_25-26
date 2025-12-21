@@ -44,6 +44,9 @@ To reproduce the results exactly as reported, please follow these setup steps.
 Python 3.8 or higher. I use the Python 3.12.7
 It is recommended to use a virtual environment venv to avoid conflicts.
 
+Bash: 
+.\venv\Scripts\activate
+
 2. **Install Dependencies**
 
 Navigate to the project root directory and install the required packages:
